@@ -84,6 +84,7 @@ export function unlockAudio() {
   el.addEventListener('error', () => { if (tracks[index].kind === 'file') radio.next(); });
 
   buildEngine();
+  buildSea();
   if (ctx.state === 'suspended') ctx.resume();
   sync();
 }
@@ -199,6 +200,39 @@ export const engine = {
   },
 };
 
+// ----------------------- ocean ambience (surf that swells and fades with distance to the shore) -----------------------
+let seaA = null;
+function buildSea() {
+  const mk = (type, freq, q) => { const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; return f; };
+  const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  const f1 = mk('lowpass', 650, 0.7), f2 = mk('highpass', 120, 0.5);
+  const g = ctx.createGain(); g.gain.value = 0;
+  const swell = ctx.createGain(); swell.gain.value = 0.5;          // slow breathing of the waves
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 0.11;
+  const lfoG = ctx.createGain(); lfoG.gain.value = 0.35;
+  lfo.connect(lfoG); lfoG.connect(swell.gain);
+  src.connect(f1); f1.connect(f2); f2.connect(swell); swell.connect(g); g.connect(master);
+  // fizz of foam
+  const src2 = ctx.createBufferSource(); src2.buffer = noiseBuf; src2.loop = true; src2.playbackRate.value = 0.9;
+  const hf = mk('bandpass', 3800, 0.8);
+  const g2 = ctx.createGain(); g2.gain.value = 0;
+  const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.11;
+  const lfo2G = ctx.createGain(); lfo2G.gain.value = 0.04;
+  lfo2.connect(lfo2G); lfo2G.connect(g2.gain);
+  src2.connect(hf); hf.connect(g2); g2.connect(master);
+  src.start(); src2.start(); lfo.start(); lfo2.start();
+  seaA = { g, g2 };
+}
+export const ambient = {
+  // near01: 0 far from water .. 1 at the shoreline / on the water
+  sea(near01) {
+    if (!unlocked || !seaA) return;
+    const now = ctx.currentTime;
+    seaA.g.gain.setTargetAtTime(near01 * 0.22, now, 0.4);
+    seaA.g2.gain.setTargetAtTime(near01 * 0.035, now, 0.4);
+  },
+};
+
 // ----------------------- sound effects -----------------------
 function ready() { return unlocked && ctx.state === 'running'; }
 export const sfx = {
@@ -222,6 +256,93 @@ export const sfx = {
   splash() {
     if (!ready()) return; const t = ctx.currentTime;
     noise(t, 0.6, 0.35, 'bandpass', 1000, master);
+  },
+  explosion() {
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 1.6, 1.0, 'lowpass', 700, master);
+    noise(t, 0.5, 0.8, 'bandpass', 1800, master);
+    noise(t + 0.15, 1.2, 0.4, 'lowpass', 300, master);
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(22, t + 0.9);
+    g.gain.setValueAtTime(1.0, t); g.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 1.1);
+  },
+  splashBig() {                                    // a car or body hitting the water
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 1.1, 0.7, 'lowpass', 900, master);
+    noise(t, 0.5, 0.5, 'bandpass', 2400, master);
+    noise(t + 0.08, 0.7, 0.3, 'highpass', 3500, master);
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(35, t + 0.4);
+    g.gain.setValueAtTime(0.6, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.5);
+  },
+  wade() {                                         // footsteps through the shallows
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 0.22, 0.22, 'bandpass', 700 + Math.random() * 700, master);
+    noise(t + 0.04, 0.12, 0.1, 'highpass', 3000, master);
+  },
+  swim() {                                         // a swimming stroke
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 0.5, 0.2, 'bandpass', 500 + Math.random() * 400, master);
+    noise(t + 0.1, 0.35, 0.08, 'highpass', 2500, master);
+  },
+  bubbles(n = 6) {                                 // gurgling while something sinks
+    if (!ready()) return; const t = ctx.currentTime;
+    for (let i = 0; i < n; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain(), s = t + i * 0.09 + Math.random() * 0.05;
+      const f0 = 260 + Math.random() * 380;
+      o.type = 'sine'; o.frequency.setValueAtTime(f0, s); o.frequency.exponentialRampToValueAtTime(f0 * 2.2, s + 0.07);
+      g.gain.setValueAtTime(0.0001, s); g.gain.linearRampToValueAtTime(0.18, s + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, s + 0.09);
+      o.connect(g); g.connect(master); o.start(s); o.stop(s + 0.12);
+    }
+    noise(t, 0.9, 0.12, 'lowpass', 500, master);
+  },
+  gun(kind = 'pistol') {
+    if (!ready()) return; const t = ctx.currentTime;
+    const boom = (f0, f1, g0, d) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + d);
+      g.gain.setValueAtTime(g0, t); g.gain.exponentialRampToValueAtTime(0.001, t + d + 0.03);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.06);
+    };
+    if (kind === 'pistol') { noise(t, 0.16, 0.9, 'highpass', 900, master); noise(t, 0.3, 0.45, 'lowpass', 1800, master); boom(180, 45, 0.7, 0.14); noise(t + 0.05, 0.45, 0.1, 'bandpass', 700, master); }
+    else if (kind === 'smg') { noise(t, 0.1, 0.8, 'highpass', 1200, master); noise(t, 0.16, 0.4, 'lowpass', 2400, master); boom(220, 60, 0.5, 0.08); }
+    else if (kind === 'shotgun') { noise(t, 0.5, 1.0, 'lowpass', 2600, master); noise(t, 0.2, 0.8, 'highpass', 600, master); boom(120, 28, 1.0, 0.3); noise(t + 0.1, 0.8, 0.18, 'bandpass', 500, master); }
+    else { noise(t, 0.12, 1.0, 'highpass', 1800, master); noise(t, 0.4, 0.5, 'lowpass', 3000, master); boom(150, 38, 0.9, 0.22); noise(t + 0.12, 0.9, 0.16, 'bandpass', 900, master); }
+  },
+  click() {
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 0.03, 0.4, 'highpass', 3500, master);
+  },
+  reload(kind = 'pistol') {
+    if (!ready()) return; const t = ctx.currentTime;
+    const tick = (dt, f, g) => noise(t + dt, 0.05, g, 'bandpass', f, master);
+    if (kind === 'shotgun') { for (let i = 0; i < 4; i++) tick(i * 0.28, 2500, 0.35); tick(1.2, 1200, 0.6); tick(1.35, 3500, 0.45); }
+    else { tick(0, 1800, 0.35); tick(0.45, 900, 0.5); tick(0.9, 2800, 0.5); tick(1.0, 1400, 0.4); }
+  },
+  shell() {
+    if (!ready()) return; const t = ctx.currentTime + 0.25;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 4200 + Math.random() * 800;
+    g.gain.setValueAtTime(0.1, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.1);
+  },
+  ricochet() {
+    if (!ready()) return; const t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(2800, t); o.frequency.exponentialRampToValueAtTime(900, t + 0.22);
+    g.gain.setValueAtTime(0.1, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2000;
+    o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t + 0.3);
+  },
+  door() {
+    if (!ready()) return; const t = ctx.currentTime;
+    noise(t, 0.12, 0.4, 'lowpass', 700, master);
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.12);
+    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.2);
   },
   pass() {
     if (!ready()) return; const t = ctx.currentTime;

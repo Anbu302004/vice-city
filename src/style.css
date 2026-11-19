@@ -258,3 +258,24 @@ body:not(.playing) .hud, body:not(.playing) #map { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) {
   #title .grid, #radio .disc, #radio .eq i, #title .go { animation: none; }
 }
+
+/* ---- weapons HUD ---- */
+#weapon { position: fixed; right: 22px; bottom: 96px; text-align: right; color: #fff; font-family: 'Bebas Neue', 'Rajdhani', sans-serif; letter-spacing: 2px; text-shadow: 0 2px 6px rgba(0,0,0,.7); pointer-events: none; z-index: 20; }
+#weapon .wname { font-size: 22px; color: #ffd166; }
+#weapon .wammo { font-size: 34px; line-height: 1; }
+#weapon .wammo b { font-size: 46px; color: #27e8ff; text-shadow: 0 0 12px rgba(39,232,255,.7); }
+#weapon .wslots { margin-top: 6px; display: flex; gap: 5px; justify-content: flex-end; }
+#weapon .wslots i { font-style: normal; font-size: 14px; width: 22px; height: 22px; line-height: 22px; text-align: center; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; background: rgba(0,0,0,.35); color: #ccc; }
+#weapon .wslots i.on { background: #ff2d95; border-color: #ff2d95; color: #fff; }
+#weapon .wmsg { font-size: 16px; color: #ff6b6b; min-height: 18px; }
+#xhair { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 19; pointer-events: none; display: none; --g: 8px; }
+#xhair.on { display: block; }
+#xhair i { position: absolute; background: #fff; box-shadow: 0 0 3px #000; }
+#xhair::after { content: ''; position: absolute; width: 4px; height: 4px; left: -2px; top: -2px; border-radius: 50%; background: #fff; box-shadow: 0 0 4px #000; }
+#xhair .t { width: 3px; height: 13px; left: -1.5px; top: calc(-13px - var(--g)); }
+#xhair .b { width: 3px; height: 13px; left: -1.5px; top: var(--g); }
+#xhair .l { width: 13px; height: 3px; top: -1.5px; left: calc(-13px - var(--g)); }
+#xhair .r { width: 13px; height: 3px; top: -1.5px; left: var(--g); }
+#xhair.aim i { background: #ff2d95; }
+
+#fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 60; }
