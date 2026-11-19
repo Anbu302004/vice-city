@@ -354,6 +354,128 @@ export function makeCar(color, kind = 'sedan') {
   return car;
 }
 
+// ======================= MOTORBIKE =======================
+let _bikeTire = null;
+function bikeTireGeo(wr) {
+  if (_bikeTire) return _bikeTire;
+  const p = [[wr * 0.72, -0.07], [wr * 0.93, -0.075], [wr * 0.99, -0.045], [wr, -0.02], [wr, 0.02], [wr * 0.99, 0.045], [wr * 0.93, 0.075], [wr * 0.72, 0.07], [wr * 0.72, -0.07]]
+    .map(([x, y]) => new THREE.Vector2(x, y));
+  const g = new THREE.LatheGeometry(p, 28);
+  g.rotateZ(Math.PI / 2);
+  return (_bikeTire = g);
+}
+function bikeWheel(wr, rimMat) {
+  const spin = new THREE.Group();
+  spin.add(new THREE.Mesh(bikeTireGeo(wr), tireMat));
+  const rr = wr * 0.7;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(rr, 0.018, 6, 24), rimMat);
+  lip.rotation.y = Math.PI / 2;
+  spin.add(lip);
+  for (let k = 0; k < 5; k++) {
+    const sp = new THREE.Mesh(unitBox, rimMat);
+    sp.scale.set(0.025, rr * 1.9, 0.045);
+    sp.rotation.x = (k / 5) * Math.PI;
+    spin.add(sp);
+  }
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(rr * 0.62, rr * 0.62, 0.012, 20), discMat);
+  disc.rotation.z = Math.PI / 2; disc.position.x = 0.05;
+  spin.add(disc);
+  return spin;
+}
+
+export function makeBike(color = 0xe63946) {
+  const WR = 0.36, ZF = 0.82, ZR = -0.78;
+  const bike = new THREE.Group();
+  const chassis = new THREE.Group();
+  bike.add(chassis);
+  const paint = new THREE.MeshPhysicalMaterial({ color, metalness: 0.5, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0xcfcfd8, metalness: 1, roughness: 0.25 });
+  const add = (geo, m, x, y, z, p = chassis) => { const me = new THREE.Mesh(geo, m); me.position.set(x, y, z); p.add(me); return me; };
+  const cyl = (r, len) => new THREE.CylinderGeometry(r, r, len, 10);
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.8 });
+  const revMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.15 });
+
+  // front end: fork + wheel + bars + headlight (all steer together)
+  const front = new THREE.Group();
+  front.position.set(0, WR, ZF);
+  chassis.add(front);
+  const fSpin = bikeWheel(WR, rimMat);
+  front.add(fSpin);
+  for (const sx of [-1, 1]) {
+    const tube = add(cyl(0.028, 0.78), chromeMat, sx * 0.1, 0.4, -0.12, front);
+    tube.rotation.x = -0.32;
+    add(cyl(0.04, 0.3), chromeMat, sx * 0.1, 0.62, -0.2, front).rotation.x = -0.32;
+  }
+  add(cyl(0.018, 0.78), chromeMat, 0, 0.78, -0.27, front).rotation.z = Math.PI / 2;               // handlebar
+  for (const sx of [-1, 1]) {
+    add(cyl(0.022, 0.12), darkTrim, sx * 0.36, 0.78, -0.27, front).rotation.z = Math.PI / 2;     // grips
+    add(unitBox, chromeMat, sx * 0.3, 0.88, -0.2, front).scale.set(0.1, 0.07, 0.015);              // mirrors
+  }
+  const fairing = add(unitBox, paint, 0, 0.66, 0.05, front);
+  fairing.scale.set(0.34, 0.3, 0.3); fairing.rotation.x = -0.3;
+  add(new THREE.SphereGeometry(0.11, 12, 8), headMat, 0, 0.68, 0.22, front).scale.set(1.05, 0.9, 0.7);
+  const screen = add(unitBox, glassMat, 0, 0.9, -0.02, front);
+  screen.scale.set(0.3, 0.2, 0.012); screen.rotation.x = -0.55;
+  add(unitBox, paint, 0, WR + 0.1, 0.0, front).scale.set(0.16, 0.025, 0.4);                         // front mudguard
+
+  // body
+  add(new THREE.CapsuleGeometry(0.17, 0.4, 5, 10), paint, 0, 0.93, 0.27).rotation.x = Math.PI / 2 - 0.1;   // tank
+  chassis.children[chassis.children.length - 1].scale.set(1, 1, 0.8);
+  add(unitBox, seatMat, 0, 0.84, -0.3).scale.set(0.26, 0.09, 0.6);                                   // seat
+  const cowl = add(unitBox, paint, 0, 0.92, -0.78); cowl.scale.set(0.24, 0.16, 0.5); cowl.rotation.x = 0.18;
+  add(unitBox, paint, 0, 0.62, -0.7).scale.set(0.2, 0.05, 0.6);                                       // rear fender
+  add(unitBox, darkTrim, 0, 0.5, 0.0).scale.set(0.3, 0.38, 0.55);                                     // engine
+  add(unitBox, discMat, 0, 0.43, 0.02).scale.set(0.32, 0.12, 0.4);
+  for (const sx of [-1, 1]) {
+    add(cyl(0.05, 0.95), chromeMat, sx * 0.2, 0.34, -0.55).rotation.x = Math.PI / 2;               // exhausts
+    add(cyl(0.065, 0.2), darkTrim, sx * 0.2, 0.36, -1.05).rotation.x = Math.PI / 2;
+    add(unitBox, darkTrim, sx * 0.1, WR + 0.02, ZR + 0.35).scale.set(0.045, 0.045, 0.78);            // swing arm
+  }
+  add(unitBox, tailMat, 0, 0.84, -1.04).scale.set(0.2, 0.07, 0.05);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.13), new THREE.MeshStandardMaterial({ color: 0xf4f1e6, roughness: 0.6 }));
+  plate.position.set(0, 0.74, -1.065); plate.rotation.y = Math.PI;
+  chassis.add(plate);
+
+  // rear wheel
+  const rear = new THREE.Group();
+  rear.position.set(0, WR, ZR);
+  chassis.add(rear);
+  const rSpin = bikeWheel(WR, rimMat);
+  rear.add(rSpin);
+
+  // rider (only visible while somebody is on the bike)
+  const driver = new THREE.Group();
+  const suit = new THREE.MeshStandardMaterial({ color: 0x1b1b22, roughness: 0.7 });
+  const skinM = new THREE.MeshStandardMaterial({ color: 0xe0b08a, roughness: 0.7 });
+  const helm = new THREE.MeshPhysicalMaterial({ color: 0xf4f4f4, roughness: 0.25, clearcoat: 1 });
+  const torso = add(new THREE.CapsuleGeometry(0.16, 0.34, 4, 8), suit, 0, 1.25, -0.2, driver);
+  torso.rotation.x = 0.5; torso.scale.set(1.2, 1, 0.8);
+  add(new THREE.SphereGeometry(0.15, 14, 10), helm, 0, 1.56, 0.0, driver);
+  add(unitBox, glassMat, 0, 1.56, 0.12, driver).scale.set(0.2, 0.07, 0.06);
+  for (const sx of [-1, 1]) {
+    const upper = add(new THREE.CapsuleGeometry(0.045, 0.3, 3, 6), suit, sx * 0.24, 1.3, 0.02, driver);
+    upper.rotation.x = 1.0;
+    add(new THREE.CapsuleGeometry(0.04, 0.25, 3, 6), suit, sx * 0.28, 1.16, 0.26, driver).rotation.x = 1.15;
+    add(new THREE.SphereGeometry(0.045, 8, 6), skinM, sx * 0.3, 1.12, 0.37, driver);
+    const th = add(new THREE.CapsuleGeometry(0.07, 0.34, 3, 6), suit, sx * 0.2, 0.92, -0.05, driver);
+    th.rotation.x = 1.25;
+    const sh = add(new THREE.CapsuleGeometry(0.055, 0.34, 3, 6), suit, sx * 0.21, 0.58, 0.28, driver);
+    sh.rotation.x = -0.2;
+    add(unitBox, darkTrim, sx * 0.21, 0.36, 0.36, driver).scale.set(0.1, 0.07, 0.26);
+  }
+  driver.visible = false;
+  chassis.add(driver);
+
+  bakeStatic(chassis, [plate]);
+  bike.add(makeBlob(1.0, 2.8));
+  bike.userData = {
+    speed: 0, angle: 0, steerIn: 0, steerVis: 0, spin: 0, kind: 'bike', brake: false, lean: 0,
+    maxSpeed: 58, accel: 40, turn: 2.9, spinners: [fSpin, rSpin], fronts: [front], wr: WR,
+    chassis, driver, tailMat, revMat, paint, prevSpeed: 0, acc: 0, roll: 0, pitch: 0, glow: null, skid: 0,
+  };
+  return bike;
+}
+
 // body pitch / roll, brake lights, reverse lights - call every frame for every car
 export function updateCarVisuals(car, dt, night) {
   const d = car.userData;
