@@ -7,7 +7,9 @@ import { createCrowd } from './crowd.js';
 import { createTraffic } from './traffic.js';
 import { makeWater } from './water.js';
 import { buildScenery } from './scenery.js';
-import { unlockAudio, radio, engine, sfx } from './audio.js';
+import { createWeapons } from './weapons.js';
+import { buildInteriors } from './interiors.js';
+import { unlockAudio, radio, engine, sfx, ambient } from './audio.js';
 
 // ======================= RENDERER / SCENE =======================
 const scene = new THREE.Scene();
@@ -189,15 +191,15 @@ scene.add(sky);
 
 // ======================= ISLAND (animated ocean, beach, asphalt) =======================
 const WATER_Y = -0.6;
-const LAND = 380;                          // half-size of the main island (sand edge)
+const LAND = 470;                          // half-size of the main island (sand edge)
 const PIER = { z: 150, end: LAND + 62, hw: 4 };
 const ISLANDS = [                          // small islands out at sea (boat missions)
-  { x: -700, z: 520, r: 80, light: true },
-  { x: 640, z: -640, r: 95 },
-  { x: 880, z: 470, r: 55 },
-  { x: -620, z: -760, r: 70 },
+  { x: -875, z: 650, r: 80, light: true },
+  { x: 800, z: -800, r: 95 },
+  { x: 1100, z: 590, r: 55 },
+  { x: -775, z: -950, r: 70 },
 ];
-const SEA_LIMIT = 1100;
+const SEA_LIMIT = 1400;
 
 const waveH = (x, z, t) => Math.sin(x * 0.045 + t * 0.9) * 0.2 + Math.sin(z * 0.06 - t * 1.1) * 0.17 + Math.sin((x + z) * 0.11 + t * 1.7) * 0.07;
 // island outline: a big square with rounded corners (distance < 0 means inside the shoreline)
@@ -206,6 +208,7 @@ function islandDist(x, z) {
   const qx = Math.abs(x) - (LAND - CORNER_R), qz = Math.abs(z) - (LAND - CORNER_R);
   return Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0) - CORNER_R;
 }
+const groundH = (x, z) => { const d = islandDist(x, z); return d <= 0 ? -0.2 : Math.max(-0.2 - d * 0.075, -10); };
 const SHORE_OFF = 5.3;                          // the beach slope meets the water this far outside the nominal edge
 const water = makeWater({ land: LAND + SHORE_OFF, cornerR: CORNER_R, islands: ISLANDS.map((i) => ({ x: i.x, z: i.z, r: i.r * 0.64 / 0.82 })), sunDir });
 const ocean = water.mesh;
@@ -226,7 +229,7 @@ const sandTex = canvasTex(256, 256, (g, w, h) => {
   }
 }, true);
 sandTex.repeat.set(70, 70);
-const TERR = LAND * 2 + 260, TSEG = 260;
+const TERR = LAND * 2 + 300, TSEG = 340;
 const terrGeo = new THREE.PlaneGeometry(TERR, TERR, TSEG, TSEG);
 terrGeo.rotateX(-Math.PI / 2);
 {
@@ -254,17 +257,18 @@ const asphaltTex = canvasTex(256, 256, (g, w, h) => {
     g.fillRect(Math.random() * w, Math.random() * h, 1.5, 1.5);
   }
 }, true);
-asphaltTex.repeat.set(60, 60);
+asphaltTex.repeat.set(70, 70);
 const asphalt = new THREE.Mesh(
-  new THREE.PlaneGeometry(600, 600),
+  new THREE.PlaneGeometry(700, 700),
   new THREE.MeshStandardMaterial({ map: asphaltTex, roughness: 0.9 })
 );
 asphalt.rotation.x = -Math.PI / 2;
 scene.add(ocean, terrain, asphalt);
 
 // ======================= CITY LAYOUT =======================
-const CELL = 80, BLOCK = 60, GRID = 3, LIMIT = LAND - 2;
-const ROADS = [-200, -120, -40, 40, 120, 200];
+const CELL = 80, BLOCK = 60, GRID = 4, LIMIT = LAND - 2;
+const ROADS = [-280, -200, -120, -40, 40, 120, 200, 280];
+const CITY_R = GRID * CELL + 30;
 const colliders = [];
 const blocks = [];
 const bldgs = [];
@@ -277,7 +281,7 @@ const stripeGeo = new THREE.PlaneGeometry(0.9, 3.4); stripeGeo.rotateX(-Math.PI 
 const lineGeo = new THREE.PlaneGeometry(0.22, 1); lineGeo.rotateX(-Math.PI / 2);
 
 const dashes = [], yellows = [], zebra = [];
-const bounds = [-300, ...ROADS, 300];
+const bounds = [-CITY_R, ...ROADS, CITY_R];
 for (const r of ROADS) {
   for (let i = 0; i < bounds.length - 1; i++) {
     const s = bounds[i] + (i === 0 ? 0 : 17);
@@ -347,6 +351,10 @@ const acMat = new THREE.MeshStandardMaterial({ color: 0x8a8a95, roughness: 0.8 }
 const pastel = [0xff9ecb, 0x7fe6e0, 0xfff1a8, 0xc6a8ff, 0xffffff, 0xffb48a, 0x9ad7ff];
 const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xa9a7b3, roughness: 0.95 });
 
+const PARKS = [[2, -2], [-3, 2], [3, 3], [-1, -3], [0, 2]];
+const parkTrees = [];
+const parkGrass = new THREE.MeshStandardMaterial({ color: 0x3f9b55, roughness: 1 });
+const parkWater = new THREE.MeshStandardMaterial({ color: 0x2aa6c8, roughness: 0.1, metalness: 0.3 });
 for (let i = -GRID; i <= GRID; i++) {
   for (let j = -GRID; j <= GRID; j++) {
     const cx = i * CELL, cz = j * CELL;
@@ -354,12 +362,23 @@ for (let i = -GRID; i <= GRID; i++) {
     slab.position.set(cx, 0.15, cz);
     scene.add(slab);
     blocks.push({ x: cx, z: cz });
+    if (PARKS.some(([pi, pj]) => pi === i && pj === j)) {
+      const grass = new THREE.Mesh(new THREE.PlaneGeometry(BLOCK - 4, BLOCK - 4), parkGrass);
+      grass.rotation.x = -Math.PI / 2; grass.position.set(cx, 0.32, cz);
+      scene.add(grass);
+      const pond = new THREE.Mesh(new THREE.CircleGeometry(9, 24), parkWater);
+      pond.rotation.x = -Math.PI / 2; pond.position.set(cx + 8, 0.34, cz - 6);
+      scene.add(pond);
+      for (let k = 0; k < 16; k++) parkTrees.push({ x: cx + (rand() - 0.5) * 50, z: cz + (rand() - 0.5) * 50, ry: rand() * 6, sx: 0.9 + rand() * 0.5, sy: 0.9 + rand() * 0.6, sz: 0.9 + rand() * 0.5 });
+      continue;
+    }
 
     for (const ox of [-15, 15]) {
       for (const oz of [-15, 15]) {
         if (rand() < 0.15) continue;
         const w = 20 + rand() * 4, d = 20 + rand() * 4;
-        const h = 12 + rand() * (rand() < 0.25 ? 55 : 28);
+        const ring = Math.max(Math.abs(i), Math.abs(j));
+        const h = ring <= 1 ? 26 + rand() * (rand() < 0.45 ? 80 : 40) : ring >= GRID - 0 ? 8 + rand() * 14 : 12 + rand() * (rand() < 0.25 ? 55 : 28);
         const color = pastel[Math.floor(rand() * pastel.length)];
 
         const map = winBase.clone();
@@ -433,6 +452,7 @@ for (const b of blocks) {
     heads.push({ x: b.x + ox, z: b.z + oz, ry });
   }
 }
+palms.push(...parkTrees);
 inst(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 1 }), palms);
 inst(frondGeo(), new THREE.MeshStandardMaterial({ color: 0x1f9d55, roughness: 0.8, side: THREE.DoubleSide }), palms);
 inst(poleGeo, new THREE.MeshStandardMaterial({ color: 0x44444c, metalness: 0.6, roughness: 0.5 }), poles);
@@ -580,7 +600,7 @@ function collideCar(car) {
   for (const off of [-1.2, 1.2]) {
     const p = car.position.clone().addScaledVector(fwd, off);
     const before = p.clone();
-    if (collide(p, 1.15)) { hit = true; car.position.add(p.sub(before)); }
+    if (collide(p, 1.15, 0, LAND + 110)) { hit = true; car.position.add(p.sub(before)); }
   }
   if (hit) car.userData.speed *= 0.6;
   return hit;
@@ -658,7 +678,7 @@ scene.add(player);
 const PH = 28.3;
 let walkSpeed = 0;
 const crowd = createCrowd({
-  scene, rand, CELL, PH, GRID, count: 80, cars,
+  scene, rand, CELL, PH, GRID, count: 130, cars,
   collide: (pos, r) => collide(pos, r),
   getPlayer: () => {
     const p = getPos();
@@ -684,7 +704,7 @@ function makeTrafficCar() {
   return car;
 }
 const traffic = createTraffic({
-  scene, ROADS, cars, rand, count: 26, makeVehicle: makeTrafficCar,
+  scene, ROADS, cars, rand, count: 40, makeVehicle: makeTrafficCar,
   getPeds: () => peds,
 });
 
@@ -837,6 +857,7 @@ function currentVehicle() { return mode === 'car' ? currentCar : mode === 'heli'
 function nearestVehicle() {
   let best = null, bd = Infinity, type = '';
   for (const c of cars) {
+    if (c.userData.wreck) continue;
     const d = flat(c.position, player.position);
     if (d < 5 && d < bd) { best = c; bd = d; type = 'car'; }
   }
@@ -868,8 +889,10 @@ function setDriverVisible(v, on) { if (v && v.userData.driver) v.userData.driver
 function toggleVehicle() {
   if (mode === 'foot') {
     if (dead) return;
+    if (inside) { if (nearExit()) exitInterior(); return; }
     const v = nearestVehicle();
-    if (!v) return;
+    if (!v) { const dr = nearestDoor(); if (dr && !swimming) enterInterior(dr); return; }
+    weapons.aiming = false; weapons.setMouse(false);
     if (v.type === 'car' && v.obj.userData.ai) carjack(v.obj);
     player.visible = false;
     if (v.type === 'car') {
@@ -1087,12 +1110,15 @@ function separateCars() {
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
       const a = all[i], b = all[j];
+      if (a.userData.wreck || b.userData.wreck) continue;
       const dx = b.position.x - a.position.x, dz = b.position.z - a.position.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 3.2 && dist > 0.001) {
         const push = (3.2 - dist) / 2 / dist;
         a.position.x -= dx * push; a.position.z -= dz * push;
         b.position.x += dx * push; b.position.z += dz * push;
+        const rel = Math.abs(a.userData.speed - b.userData.speed);
+        if (rel > 10 && (a.userData.crashCD || 0) <= 0 && (b.userData.crashCD || 0) <= 0) { a.userData.crashCD = b.userData.crashCD = 0.4; damageCar(a, rel * 0.45); damageCar(b, rel * 0.45); if (a === currentCar || b === currentCar) { sfx.crash(); weapons.addShake(0.35); } }
         a.userData.speed *= 0.97; b.userData.speed *= 0.97;
         const aCop = cops.includes(a), bCop = cops.includes(b);
         const playerHit = (a === currentCar && bCop) || (b === currentCar && aCop);
@@ -1342,16 +1368,16 @@ const LEVELS = [
   { name: 'HARBOR', bonus: 4000, missions: [
     { title: 'Meet at the Pier', need: 'foot', time: 80, reward: 800, stages: [{ x: PIER.end - 8, z: PIER.z }] },
     { title: 'Speedboat Run', need: 'boat', start: PIER_START, time: 85, reward: 1800,
-      stages: [{ x: 520, z: 120 }, { x: 640, z: -60 }, { x: 540, z: -240 }, { x: 440, z: -60 }] },
+      stages: [{ x: 650, z: 120 }, { x: 790, z: -60 }, { x: 680, z: -240 }, { x: 570, z: -60 }] },
     { title: 'Dockside Brawl', need: 'foot', time: 100, reward: 2200, wanted: 1, stages: [{ x: PIER.end - 14, z: PIER.z, fight: 5 }] },
     { title: 'Lighthouse Run', need: 'boat', start: PIER_START, time: 120, reward: 2800,
-      stages: [{ x: 500, z: 470 }, { x: -200, z: 480 }, { x: -625, z: 450 }] },
+      stages: [{ x: 600, z: 590 }, { x: -200, z: 600 }, { x: -800, z: 600 }] },
   ] },
   { name: 'SKY HIGH', bonus: 6000, missions: [
     { title: 'Take to the Skies', need: 'heli', start: HELI_START, time: 80, reward: 2500,
       stages: [{ x: -200, z: 200 }, { x: 200, z: 200 }, { x: 200, z: -200 }, { x: -200, z: -200 }] },
     { title: 'Island Hopper', need: 'heli', start: HELI_START, time: 160, reward: 3500,
-      stages: [{ x: 640, z: -640 }, { x: 880, z: 470 }, { x: -700, z: 520 }] },
+      stages: [{ x: 800, z: -800 }, { x: 1100, z: 590 }, { x: -875, z: 650 }] },
     { title: 'Gang War', need: 'foot', time: 130, reward: 4000, wanted: 2, stages: [{ x: 40, z: 40, fight: 8 }] },
     { title: 'The Grand Heist', need: 'vehicle', time: 150, reward: 8000, wanted: 3,
       stages: [{ x: 200, z: 200 }, { x: -200, z: 200 }, { x: -200, z: -200 }, { x: 200, z: -200 }, { x: 40, z: -120 }] },
@@ -1569,7 +1595,7 @@ function drawMap(t) {
   mctx.fillStyle = '#0d3b57';                                         // sea
   mctx.fillRect(0, 0, S, S);
   poly(-LAND, -LAND, LAND, LAND, '#5b5238');                           // beach
-  poly(-300, -300, 300, 300, '#1d1d2b');                               // asphalt
+  poly(-CITY_R, -CITY_R, CITY_R, CITY_R, '#1d1d2b');                               // asphalt
   poly(LAND - 6, PIER.z - PIER.hw, PIER.end, PIER.z + PIER.hw, '#8a6a45'); // pier
   for (const isl of ISLANDS) {
     const [ix, iy] = tm(isl.x, isl.z);
@@ -1577,7 +1603,7 @@ function drawMap(t) {
     if (isl.light) { mctx.fillStyle = '#fff1a8'; mctx.beginPath(); mctx.arc(ix, iy, Math.max(2, 4 * sc * 3), 0, Math.PI * 2); mctx.fill(); }
   }
   for (const b of blocks) poly(b.x - 30, b.z - 30, b.x + 30, b.z + 30, '#34344d');
-  for (const b of colliders) poly(b.minX, b.minZ, b.maxX, b.maxZ, '#6a6a9c');
+  for (const b of colliders) if (!b.interior) poly(b.minX, b.minZ, b.maxX, b.maxZ, '#6a6a9c');
 
   let tgt = null, tcol = '#ffd166';
   if (mission) {
@@ -1592,7 +1618,7 @@ function drawMap(t) {
     mctx.setLineDash([]); mctx.globalAlpha = 1;
   }
 
-  for (const car of cars) if (!car.userData.ai) dot(car.position.x, car.position.z, '#00e5ff', 3.5);
+  for (const car of cars) if (!car.userData.ai && !car.userData.wreck) dot(car.position.x, car.position.z, '#00e5ff', 3.5);
   for (const bt of boats) dot(bt.position.x, bt.position.z, '#7cfc00', 4);
   for (const th of thugs) if (th.state !== 'ko') dot(th.mesh.position.x, th.mesh.position.z, '#ff3030', 3.5);
   for (const h of helis) dot(h.position.x, h.position.z, '#ffae00', 4.5);
@@ -1648,6 +1674,13 @@ function moveCar(car, dt) {
   car.position.addScaledVector(fwd, d.speed * dt);
   car.rotation.y = d.angle;
   const hit = collideCar(car);
+  updateSink(car, dt);
+  d.crashCD = (d.crashCD || 0) - dt;
+  if (hit && before > 10 && d.crashCD <= 0) { d.crashCD = 0.35; damageCar(car, (before - 8) * 0.9); }
+  if (d.hp !== undefined && d.hp < 55 && !d.wreck && !d.sinking) {
+    d.fume = (d.fume || 0) - dt;
+    if (d.fume <= 0) { d.fume = d.hp < 25 ? 0.07 : 0.17; _v.set((Math.random() - 0.5) * 0.6, 1.0, 1.6); car.updateMatrixWorld(); car.localToWorld(_v); smoke.emit(_v.x, _v.y, _v.z); }
+  }
 
   d.spin += (d.speed * dt) / d.wr;
   d.steerVis += ((d.steerIn || 0) * 0.45 - d.steerVis) * Math.min(1, 8 * dt);
@@ -1672,10 +1705,7 @@ function moveCar(car, dt) {
     }
   }
 
-  if (hit && car === currentCar && before > 25 && crimeCD <= 0) {
-    crimeCD = 4;
-    if (wanted < 1) { setWanted(1); toast('WANTED', 1500); }
-  }
+  // crashing into walls is not a crime: no wanted level (only hitting people, cops or shooting raises it)
   if (hit && car === currentCar && before > 18 && hurtTimer < 5.7) {
     sfx.crash();
     if (before > 30) damagePlayer(Math.min(10, (before - 28) * 0.6), false);
@@ -1726,9 +1756,110 @@ function moveBoat(b, dt, t) {
   }
 }
 
+// ----- crash damage: dents, smoke, fire and explosions -----
+const wreckMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.9 });
+function makeWreck() {
+  const g = new THREE.Group();
+  const add = (geo, m, x, y, z, sx, sy, sz) => { const me = new THREE.Mesh(geo, m); me.position.set(x, y, z); me.scale.set(sx, sy, sz); g.add(me); };
+  add(unitBox, wreckMat, 0, 0.7, 0, 2.0, 0.8, 4.4);
+  add(unitBox, wreckMat, 0, 1.25, -0.3, 1.7, 0.5, 2.1);
+  for (const sx of [-1, 1]) for (const sz of [-1.4, 1.4]) add(unitBox, new THREE.MeshStandardMaterial({ color: 0x0c0c0c }), sx * 1.0, 0.35, sz, 0.3, 0.7, 0.7);
+  return g;
+}
+function damageCar(car, dmg) {
+  const d = car.userData;
+  if (d.ai || d.wreck || d.sinking || dmg <= 0) return;
+  d.hp = (d.hp ?? 100) - dmg;
+  const f = 1 - Math.max(0, d.hp) / 100;
+  if (d.chassis) { d.chassis.scale.z = 1 - f * 0.07; d.chassis.scale.y = 1 - f * 0.05; }
+  if (d.hp <= 0) explodeCar(car);
+}
+function explodeCar(car) {
+  const d = car.userData, p = car.position;
+  const x = p.x, z = p.z;
+  weapons.burst(x, 1.0, z, 0xff8a1a, 26, 9, 1.6, 0.9, -1, 1.4);
+  weapons.burst(x, 1.2, z, 0xffe08a, 14, 7, 1.1, 0.6, -1, 1.2);
+  weapons.burst(x, 0.8, z, 0x222222, 18, 6, 2.0, 1.6, -2, 1.0);
+  for (let i = 0; i < 10; i++) smoke.emit(x + (Math.random() - 0.5) * 3, 1 + Math.random() * 2, z + (Math.random() - 0.5) * 3);
+  if (flat(p, camera.position) < 150) sfx.explosion();
+  if (flat(p, camera.position) < 40) weapons.addShake(0.9);
+  if (car === currentCar) damagePlayer(999);
+  else {
+    const dp = flat(p, player.position);
+    if (mode === 'foot' && dp < 9) damagePlayer(70 * (1 - dp / 9));
+  }
+  for (const pd of peds) { const dd = Math.hypot(pd.x - x, pd.z - z); if (dd < 10 && pd.state === 0 && !pd.dead) { if (dd < 4) crowd.kill(pd, (pd.x - x) * 1.5, (pd.z - z) * 1.5); else crowd.knock(pd, (pd.x - x) * 1.2, (pd.z - z) * 1.2); } }
+  for (const th of thugs) if (th.state !== 'ko' && Math.hypot(th.mesh.position.x - x, th.mesh.position.z - z) < 8) knockThug(th, Math.atan2(th.mesh.position.x - x, th.mesh.position.z - z), 8, 80);
+  for (const o of cars.concat(cops)) if (o !== car && flat(o.position, p) < 8) damageCar(o, 45);
+  crowd.panic(x, z, 60);
+  if (cops.includes(car)) {
+    cops.splice(cops.indexOf(car), 1); scene.remove(car);
+  } else {
+    d.wreck = true; d.wreckT = 28; d.speed = 0; car.visible = false;
+    d.wreckMesh = makeWreck(); d.wreckMesh.position.copy(p); d.wreckMesh.rotation.y = d.angle; scene.add(d.wreckMesh);
+  }
+}
+function updateWreck(car, dt) {
+  const d = car.userData;
+  d.wreckT -= dt;
+  d.fume = (d.fume || 0) - dt;
+  if (d.fume <= 0 && d.wreckT > 4) { d.fume = 0.16; smoke.emit(car.position.x + (Math.random() - 0.5), 1.4, car.position.z + (Math.random() - 0.5)); }
+  if (d.wreckT <= 0 && flat(car.position, camera.position) > 60) {
+    scene.remove(d.wreckMesh); d.wreckMesh = null; d.wreck = false; d.hp = 100;
+    if (d.chassis) { d.chassis.scale.set(1, 1, 1); }
+    const h = d.home || { x: car.position.x, z: car.position.z, angle: d.angle };
+    car.position.set(h.x, 0, h.z); d.angle = h.angle; d.speed = 0; car.visible = true; car.rotation.set(0, d.angle, 0);
+  }
+}
+
+// ----- water: only boats float. Cars and bikes sink, people wade and swim -----
+const SWIM_MAX = 55;
+const onPierDeck = (p) => p.x > LAND - 6 && p.x < PIER.end + 0.3 && Math.abs(p.z - PIER.z) < PIER.hw + 0.3;
+function splashFX(x, z, n = 8, big = false) {
+  for (let i = 0; i < n; i++) smoke.emit(x + (Math.random() - 0.5) * (big ? 4 : 1), WATER_Y + 0.1, z + (Math.random() - 0.5) * (big ? 4 : 1));
+}
+function startSink(car) {
+  const d = car.userData;
+  d.sinking = true; d.sinkT = 0; d.sink = 0; d.sinkV = 0.4; d.bubT = 0; d.bubSnd = 0;
+  car.rotation.order = 'YXZ';
+  splashFX(car.position.x, car.position.z, 14, true);
+  if (flat(car.position, camera.position) < 120) sfx.splashBig();
+  if (car === currentCar) toast('SINKING!', 1600);
+}
+function updateSink(car, dt) {
+  const d = car.userData, p = car.position;
+  if (!d.home) d.home = { x: p.x, z: p.z, angle: d.angle };
+  if (!d.sinking) {
+    if (!d.ai && islandDist(p.x, p.z) > 6.5 && !onPierDeck(p)) startSink(car);
+    return;
+  }
+  d.speed *= 1 - 3.2 * dt;
+  d.sinkT += dt;
+  d.sinkV = Math.min(2.4, d.sinkV + 0.5 * dt);
+  d.sink += d.sinkV * dt;
+  const floor = groundH(p.x, p.z) + 0.05;
+  p.y = Math.max(-d.sink, floor);
+  car.rotation.x += (0.32 - car.rotation.x) * Math.min(1, 1.4 * dt);
+  car.rotation.z += ((Math.sin(d.sinkT * 1.7) * 0.12 + 0.1) - car.rotation.z) * Math.min(1, 2 * dt);
+  d.bubT -= dt;
+  if (d.bubT <= 0 && d.sinkT < 9) {
+    d.bubT = 0.14;
+    smoke.emit(p.x + (Math.random() - 0.5) * 2, WATER_Y + 0.05, p.z + (Math.random() - 0.5) * 3);
+  }
+  d.bubSnd -= dt;
+  if (d.bubSnd <= 0 && d.sinkT < 8 && flat(p, camera.position) < 60) { d.bubSnd = 1.4; sfx.bubbles(5); }
+  if (car === currentCar && d.sinkT > 2.4) { toggleVehicle(); toast('ABANDON SHIP!', 1400); }
+  if (d.sinkT > 22 && flat(p, camera.position) > 70 && car !== currentCar) {             // the wreck is towed away
+    d.sinking = false; d.sink = 0; d.speed = 0;
+    p.set(d.home.x, 0, d.home.z); d.angle = d.home.angle;
+    car.rotation.set(0, d.angle, 0);
+  }
+}
+
 // walking into a parked car shoves it along; you can't walk through cars
 function pushCars(dt) {
   for (const c of cars) {
+    if (c.userData.wreck) continue;
     if (c.userData.ai && Math.abs(c.userData.speed) > 2) continue;
     const a = c.userData.angle, fx = Math.sin(a), fz = Math.cos(a);
     const dx = player.position.x - c.position.x, dz = player.position.z - c.position.z;
@@ -1748,19 +1879,68 @@ function pushCars(dt) {
   }
 }
 
+let swimming = false, stepAcc = 0, inWaterPrev = false, farWarn = 0;
+function clampFoot(pos) {
+  if (onPierDeck(pos)) { pos.x = Math.min(pos.x, PIER.end); return; }
+  const d = islandDist(pos.x, pos.z);
+  if (d > SWIM_MAX) {
+    const nx = islandDist(pos.x + 1, pos.z) - islandDist(pos.x - 1, pos.z), nz = islandDist(pos.x, pos.z + 1) - islandDist(pos.x, pos.z - 1);
+    const l = Math.hypot(nx, nz) || 1;
+    pos.x -= (nx / l) * (d - SWIM_MAX); pos.z -= (nz / l) * (d - SWIM_MAX);
+    if (farWarn <= 0) { toast('TOO FAR OUT TO SWIM', 1200); farWarn = 3; }
+  }
+}
 function walk(dt) {
   const left = keys.ArrowLeft || keys.KeyA, right = keys.ArrowRight || keys.KeyD;
   const up = keys.ArrowUp || keys.KeyW, down = keys.ArrowDown || keys.KeyS;
+  const run = keys.ShiftLeft || keys.ShiftRight;
+  farWarn -= dt;
   playerAngle += ((left ? 1 : 0) - (right ? 1 : 0)) * 2.6 * dt;
-  const spd = keys.ShiftLeft || keys.ShiftRight ? 10 : 5;
+  const p = player.position;
+  const deck0 = onPierDeck(p);
+  const depth0 = deck0 || inside ? 0 : Math.max(0, WATER_Y - groundH(p.x, p.z));
+  const swimNow = depth0 > 1.15;
+  const spd = (swimNow ? (run ? 4.6 : 3.2) : (run ? 10 : 5) * (1 - Math.min(depth0, 1.1) * 0.35)) * (weapons.aiming && weapons.armed ? 0.55 : 1);
   const move = (up ? 1 : 0) - (down ? 0.6 : 0);
   const fwd = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
-  player.position.addScaledVector(fwd, move * spd * dt);
-  player.rotation.set(0, playerAngle, 0);
-  collide(player.position, 0.5);
+  p.addScaledVector(fwd, move * spd * dt);
+  player.rotation.y = playerAngle;
+  collide(p, 0.5, 0, inside ? 1e7 : LAND + 120);
+  if (!inside) clampFoot(p);
   walkSpeed = Math.abs(move) * spd;
   pushCars(dt);
-  animateHuman(player, walkSpeed, dt);
+
+  // height: wade on the sea floor, swim at the surface
+  const deck = onPierDeck(p) || !!inside, d = inside ? -50 : islandDist(p.x, p.z);
+  const depth = deck ? 0 : Math.max(0, WATER_Y - groundH(p.x, p.z));
+  swimming = depth > 1.15;
+  let ty = 0;
+  if (!deck && d > 0) ty = swimming ? WATER_Y - 0.3 + waveH(p.x, p.z, clock.elapsedTime) * 0.6 : groundH(p.x, p.z) + 0.2;
+  p.y += (ty - p.y) * Math.min(1, 9 * dt);
+  const inWater = depth > 0.05;
+  if (inWater && !inWaterPrev) { sfx.wade(); splashFX(p.x, p.z, 3); }
+  inWaterPrev = inWater;
+  if (inWater && walkSpeed > 0.5) {
+    stepAcc += walkSpeed * dt;
+    const stride = swimming ? 2.2 : 1.5;
+    if (stepAcc > stride) {
+      stepAcc = 0;
+      if (swimming) sfx.swim(); else sfx.wade();
+      splashFX(p.x + fwd.x * 0.4, p.z + fwd.z * 0.4, swimming ? 3 : 2);
+    }
+  }
+
+  animateHuman(player, swimming ? 0 : walkSpeed, dt);
+  player.rotation.x += ((swimming ? 1.3 : 0) - player.rotation.x) * Math.min(1, 6 * dt);
+  if (swimming) {                                                     // crawl stroke + flutter kick
+    const u = player.userData, ph = clock.elapsedTime * (3 + walkSpeed * 0.9);
+    u.armL.rotation.set(-1.7 + Math.sin(ph) * 1.5, 0, -0.1); u.armR.rotation.set(-1.7 + Math.sin(ph + Math.PI) * 1.5, 0, 0.1);
+    u.foreL.rotation.x = -0.3; u.foreR.rotation.x = -0.3;
+    u.legL.rotation.x = Math.sin(ph * 2) * 0.4; u.legR.rotation.x = Math.sin(ph * 2 + Math.PI) * 0.4;
+    u.shinL.rotation.x = 0.2; u.shinR.rotation.x = 0.2;
+    u.head.rotation.x = -0.9;
+  }
+  weapons.pose(dt, swimming);
 }
 
 function flyHeli(h, dt) {
@@ -1801,13 +1981,14 @@ function idleHeli(h, dt) {
   d.blob.position.set(h.position.x, 0.05, h.position.z);
 }
 
-function followCamera(target, angle, dist, height, dt) {
+function followCamera(target, angle, dist, height, dt, side = 0) {
   if (import.meta.env && import.meta.env.DEV && window.__vcFreeCam) return;
   const fwd = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
-  camTarget.copy(target).addScaledVector(fwd, -dist).add(new THREE.Vector3(0, height, 0));
+  const rx = -Math.cos(angle) * side, rz = Math.sin(angle) * side;
+  camTarget.copy(target).addScaledVector(fwd, -dist).add(new THREE.Vector3(rx, height, rz));
   camera.position.lerp(camTarget, 1 - Math.pow(0.001, dt));
   camera.position.y = Math.max(camera.position.y, 1.2);
-  camera.lookAt(target.clone().addScaledVector(fwd, 3).add(new THREE.Vector3(0, 1, 0)));
+  camera.lookAt(target.clone().addScaledVector(fwd, 3).add(new THREE.Vector3(rx * 0.9, 1, rz * 0.9)));
 }
 
 // ======================= CHEATS =======================
@@ -1889,19 +2070,161 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Enter') openCheat();
   if (e.code === 'KeyF') toggleVehicle();
   if (e.code === 'KeyM') { bigMap = !bigMap; applyMapStyle(); }
-  if (e.code === 'KeyR') radio.next();
+  if (e.code === 'KeyR') { if (mode === 'foot') weapons.startReload(); else radio.next(); }
+  if (e.code === 'KeyQ' && mode === 'foot') weapons.cycle(1);
+  if (e.code === 'KeyE' && mode === 'foot' && !dead) { const sp = interiorSpot(); if (sp) useSpot(sp); }
+  if (mode === 'foot' && !dead && e.code >= 'Digit1' && e.code <= 'Digit5') weapons.select(weapons.ORDER[+e.code.slice(5) - 1]);
+  if (e.code === 'KeyH' && canShoot()) weapons.shoot(performance.now() / 1000);
   if (e.code === 'KeyT') radio.prev();
   if (e.code === 'KeyN') radio.toggleMute();
   if (e.code === 'KeyJ') tryAttack('punch');
   if (e.code === 'KeyK') tryAttack('kick');
 });
 addEventListener('keyup', (e) => (keys[e.code] = false));
-addEventListener('pointerdown', (e) => { if (started && e.button === 0 && e.target === renderer.domElement) tryAttack('punch'); });
+const canShoot = () => started && !cheatOpen && !dead && mode === 'foot' && !swimming && weapons.armed;
+addEventListener('pointerdown', (e) => {
+  if (!started || e.target !== renderer.domElement) return;
+  if (e.button === 0) {
+    if (canShoot()) { weapons.setMouse(true); weapons.shoot(performance.now() / 1000); }
+    else tryAttack('punch');
+  } else if (e.button === 2 && mode === 'foot' && weapons.armed) {
+    weapons.aiming = true;
+    try { renderer.domElement.requestPointerLock(); } catch (err) {}
+  }
+});
+addEventListener('pointerup', (e) => {
+  if (e.button === 0) weapons.setMouse(false);
+  if (e.button === 2) { weapons.aiming = false; try { if (document.pointerLockElement) document.exitPointerLock(); } catch (err) {} }
+});
+addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('mousemove', (e) => { if (weapons.aiming && document.pointerLockElement && mode === 'foot') playerAngle -= e.movementX * 0.0034; });
+addEventListener('wheel', (e) => { if (started && mode === 'foot' && !cheatOpen) weapons.cycle(e.deltaY > 0 ? 1 : -1); }, { passive: true });
+
+// ======================= WEAPONS =======================
+let frameId = 0, humansAt = -1, humansList = [], vehAt = -1, vehList = [];
+const weapons = createWeapons({
+  scene, camera, player, sfx, smoke, keys, colliders, toast,
+  getAngle: () => playerAngle, getSpeed: () => walkSpeed, getPos: () => player.position,
+  isWater: (x, z) => islandDist(x, z) > 5.3,
+  humans() {
+    if (humansAt === frameId) return humansList;
+    humansAt = frameId; humansList = [];
+    for (const th of thugs) if (th.state !== 'ko') humansList.push({ x: th.mesh.position.x, z: th.mesh.position.z, r: 0.42, y0: 0, y1: 1.8, kind: 'thug', ref: th });
+    for (const p of peds) if (p.mesh.visible && p.state === 0 && !p.dead) humansList.push({ x: p.x, z: p.z, r: 0.4, y0: 0, y1: 1.75 * (p.mesh.userData.H || 1), kind: 'ped', ref: p });
+    return humansList;
+  },
+  vehicles() {
+    if (vehAt === frameId) return vehList;
+    vehAt = frameId; vehList = [];
+    for (const c of cars) if (c.visible && c !== currentCar) vehList.push(c);
+    for (const c of cops) vehList.push(c);
+    return vehList;
+  },
+  onHitHuman(h, dmg, head, dir) {
+    const ang = Math.atan2(dir.x, dir.z);
+    if (h.kind === 'thug') {
+      knockThug(h.ref, ang, 2 + dmg * 0.06, dmg);
+      if (h.ref.state === 'ko') { addMoney(40 + Math.floor(Math.random() * 60)); if (head) toast('HEADSHOT', 900); }
+    } else {
+      const p = h.ref;
+      p.hpShot = (p.hpShot ?? 40) - dmg;
+      if (p.hpShot <= 0) {
+        crowd.kill(p, dir.x * 3, dir.z * 3);
+        addMoney(10 + Math.floor(Math.random() * 40));
+        if (head) toast('HEADSHOT', 900);
+        if (wanted < 2) { setWanted(2); toast('WANTED', 1200); }
+      } else {
+        crowd.knock(p, dir.x * 2.5, dir.z * 2.5);
+        if (wanted < 1) { setWanted(1); toast('WANTED', 1200); }
+      }
+      crowd.panic(player.position.x, player.position.z, 45);
+    }
+  },
+  onHitVehicle(c, dmg) {
+    damageCar(c, dmg * 0.35);
+    if (cops.includes(c) && crimeCD <= 0) { crimeCD = 3; addWanted(1); toast('SHOT AT A COP', 1200); }
+    else if (c.userData.ai) c.userData.panic = 3;
+  },
+  onShot() {
+    crowd.panic(player.position.x, player.position.z, 28);
+    if (wanted < 1 && crimeCD <= 0) {
+      for (const p of peds) if (p.mesh.visible && p.state === 0 && Math.hypot(p.x - player.position.x, p.z - player.position.z) < 30) { crimeCD = 4; setWanted(1); toast('WANTED', 1200); break; }
+    }
+  },
+});
+// ammo crates around town
+{
+  const spots = [[46, 8], [30, 10], [-30, -10], [120, 22], [-110, 30]];
+  for (const [x, z] of spots) weapons.addPickup(x, z);
+  const bl = blocks.filter((b) => !PARKS.some(([i, j]) => i * CELL === b.x && j * CELL === b.z));
+  for (let i = 0; i < 14; i++) { const b = bl[Math.floor(rand() * bl.length)]; weapons.addPickup(b.x + (rand() < 0.5 ? -1 : 1) * 29.4, b.z + (rand() - 0.5) * 24); }
+}
+
+// ======================= INTERIORS =======================
+const interiorSys = buildInteriors({ scene, colliders, canvasTex, rand });
+const interiorLight = new THREE.PointLight(0xffffff, 0, 45, 1.2);
+scene.add(interiorLight);
+const fadeEl = document.createElement('div');
+fadeEl.id = 'fade'; document.body.appendChild(fadeEl);
+let inside = null, intReturn = null, intWanted = 0;
+const LIGHTS = [[0xfff1d6, 55], [0xffe9c0, 50], [0xffd9a8, 45], [0xb066ff, 90]];
+function flashFade() { fadeEl.style.transition = 'none'; fadeEl.style.opacity = '1'; void fadeEl.offsetWidth; fadeEl.style.transition = 'opacity .55s ease'; fadeEl.style.opacity = '0'; }
+function nearestDoor() {
+  let best = null, bd = 2.6;
+  for (const d of scenery.doors) { const k = Math.hypot(d.x - player.position.x, d.z - player.position.z); if (k < bd) { bd = k; best = d; } }
+  return best;
+}
+function snapCamera() {
+  const a = playerAngle;
+  camera.position.set(player.position.x - Math.sin(a) * 3.4, inside ? 2.2 : 3, player.position.z - Math.cos(a) * 3.4);
+}
+function enterInterior(door) {
+  const it = interiorSys.list[door.type];
+  inside = it; intReturn = door;
+  weapons.aiming = false; weapons.setMouse(false);
+  player.position.set(it.entry.x, 0, it.entry.z);
+  playerAngle = 0; player.rotation.set(0, 0, 0);
+  it.group.visible = true;
+  const L = LIGHTS[door.type];
+  interiorLight.color.setHex(L[0]); interiorLight.intensity = L[1];
+  interiorLight.position.set(it.cx, it.h - 0.9, it.cz);
+  intWanted = wanted;
+  if (wanted > 0) { clearCops(); setWanted(0); toast('LAYING LOW', 1200); }
+  if (it.music) radio.setActive(true);
+  sfx.door(); flashFade(); snapCamera();
+}
+function exitInterior() {
+  const it = inside, d = intReturn;
+  it.group.visible = false;
+  interiorLight.intensity = 0;
+  inside = null;
+  player.position.set(d.x, 0, d.z);
+  playerAngle = Math.atan2(d.nx, d.nz); player.rotation.set(0, playerAngle, 0);
+  if (intWanted > 0) { setWanted(Math.max(0, intWanted - 1)); intWanted = 0; }
+  radio.setActive(false);
+  sfx.door(); flashFade(); snapCamera();
+}
+function interiorSpot() {
+  if (!inside) return null;
+  for (const sp of inside.spots) if (Math.hypot(inside.cx + sp.x - player.position.x, inside.cz + sp.z - player.position.z) < sp.r) return sp;
+  return null;
+}
+function nearExit() {
+  return inside && Math.hypot(inside.exit.x - player.position.x, inside.exit.z - player.position.z) < inside.exit.r;
+}
+function useSpot(sp) {
+  const pay = (n) => { if (money < n) { toast('NOT ENOUGH CASH', 1200); return false; } addMoney(-n); return true; };
+  if (sp.act === 'snack' && pay(20)) { hp = Math.min(MAX_HP, hp + 30); renderHealth(); toast('YUM  +30 HP', 1300); sfx.pass(); }
+  else if (sp.act === 'ammo' && pay(150)) { weapons.refillAll(); toast('AMMO REFILLED', 1300); sfx.pass(); }
+  else if (sp.act === 'drink' && pay(30)) { hp = Math.min(MAX_HP, hp + 15); renderHealth(); toast('CHEERS  +15 HP', 1300); sfx.pass(); }
+  else if (sp.act === 'sleep') { hp = MAX_HP; renderHealth(); setNight(!night); flashFade(); toast(night ? 'YOU SLEPT\nIT IS NIGHT' : 'YOU SLEPT\nA NEW DAY', 2200); }
+}
 
 // ======================= MAIN LOOP =======================
 const clock = new THREE.Clock();
 
 function update(dt, t) {
+  frameId++;
   updatePeds(dt);
 
   if (!started) {
@@ -1913,6 +2236,7 @@ function update(dt, t) {
 
   traffic.update(dt, t, cars.concat(cops), camera.position);
   for (const c of cars) {
+    if (c.userData.wreck) { updateWreck(c, dt); continue; }
     if (c.userData.ai) { /* driven by traffic.update */ }
     else if (c !== currentCar) { c.userData.speed *= 1 - 3 * dt; c.userData.steerIn = 0; c.userData.brake = false; c.userData.skid = 0; }
     else driveCar(c, dt);
@@ -1941,9 +2265,21 @@ function update(dt, t) {
       if (deadTimer <= 0) { dead = false; wastedEl.classList.remove('show'); respawnPlayer(); }
     } else {
       walk(dt);
-      followCamera(player.position, playerAngle, 7, 3, dt);
-      const v = nearestVehicle();
-      if (v) msg = v.type === 'heli' ? 'Press F to board helicopter' : v.type === 'boat' ? 'Press F to board speedboat' : v.obj.userData.kind === 'bike' ? 'Press F to get on the bike' : v.obj.userData.ai ? 'Press F to carjack!' : 'Press F to enter car';
+      const ad = weapons.aiming && weapons.armed;
+      if (inside) {
+        followCamera(player.position, playerAngle, ad ? 2.8 : 3.8, ad ? 1.9 : 2.3, dt, weapons.armed ? 0.6 : 0);
+        const bd = inside.bounds;
+        camera.position.x = THREE.MathUtils.clamp(camera.position.x, bd.minX, bd.maxX);
+        camera.position.z = THREE.MathUtils.clamp(camera.position.z, bd.minZ, bd.maxZ);
+        camera.position.y = Math.min(camera.position.y, bd.h - 0.35);
+      } else followCamera(player.position, playerAngle, ad ? 4.4 : 7, ad ? 2.3 : 3, dt, weapons.armed ? (ad ? 1.1 : 0.8) : 0);
+      if (weapons.shake > 0) { camera.position.x += (Math.random() - 0.5) * weapons.shake * 0.12; camera.position.y += (Math.random() - 0.5) * weapons.shake * 0.08; }
+      const v = inside ? null : nearestVehicle();
+      const door = inside ? null : nearestDoor();
+      const spot = interiorSpot();
+      if (inside) msg = spot ? spot.label : nearExit() ? 'Press F to leave' : '';
+      else if (!v && door && !swimming) msg = 'Press F to enter  ' + door.name;
+      else if (v) msg = v.type === 'heli' ? 'Press F to board helicopter' : v.type === 'boat' ? 'Press F to board speedboat' : v.obj.userData.kind === 'bike' ? 'Press F to get on the bike' : v.obj.userData.ai ? 'Press F to carjack!' : 'Press F to enter car';
       else if (aliveThugs() > 0) msg = 'J punch  ·  K kick';
     }
   } else if (mode === 'car') {
@@ -1967,7 +2303,7 @@ function update(dt, t) {
 
   // field of view widens with speed
   const vd = veh && veh.userData;
-  const targetFov = vd && mode !== 'heli' ? 68 + Math.min(1, Math.abs(vd.speed) / vd.maxSpeed) * 12 : 68;
+  const targetFov = vd && mode !== 'heli' ? 68 + Math.min(1, Math.abs(vd.speed) / vd.maxSpeed) * 12 : (weapons.aiming && weapons.armed && mode === 'foot' ? 52 : 68);
   if (Math.abs(camera.fov - targetFov) > 0.05) { camera.fov += (targetFov - camera.fov) * Math.min(1, 4 * dt); camera.updateProjectionMatrix(); }
 
   // sound
@@ -1977,9 +2313,12 @@ function update(dt, t) {
   } else engine.update(null, 0, 0);
   radioEl.classList.toggle('show', !!veh);
 
+  { const gp = getPos(), gd = islandDist(gp.x, gp.z); ambient.sea(inside ? 0 : gd > 0 ? 1 : Math.max(0, 1 - (-gd) / 140)); }
+  if (inside) interiorSys.update(inside, dt, t);
   headSpot.intensity = night && mode === 'car' ? 900 : 0;
 
   updateThugs(dt);
+  weapons.update(dt, t, mode === 'foot' && !dead && !swimming);
   updateMissions(dt, t);
   updatePolice(dt, t);
   separateCars();
@@ -2012,7 +2351,7 @@ addEventListener('resize', () => {
 let simT = 0;
 if (import.meta.env && import.meta.env.DEV) {
   window.__vc = {
-    THREE, scene, camera, cars, boats, helis, player, thugs, peds, crowd, traffic, cops,
+    THREE, scene, camera, cars, boats, helis, player, thugs, peds, crowd, traffic, cops, weapons, spawnThug, interiorSys, enterInterior, exitInterior, doors: () => scenery.doors, inside: () => inside, getAngle: () => playerAngle, setAngle: (a) => { playerAngle = a; },
     state: () => ({ mode, levelIdx, missionIndex, hp, money, wanted, dead, mission: mission && { title: mission.def.title, stage: mission.stage, t: Math.round(mission.timeLeft) } }),
     setPos: (x, z) => player.position.set(x, 0, z),
     enter: toggleVehicle,
